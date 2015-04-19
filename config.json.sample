@@ -1,0 +1,11 @@
+{
+    "reddit_client_id": "REDDIT_CLIENT_ID",
+    "reddit_client_secret": "REDDIT_CLIENT_SECRET",
+    "reddit_username": "REDDIT_USERNAME",
+    "reddit_password": "REDDIT_PASSWORD",
+
+    "soundcloud_client_id": "SOUNDCLOUD_CLIENT_ID",
+    "soundcloud_client_secret": "SOUNDCLOUD_CLIENT_SECRET",
+
+    "subreddit_name": "SUBREDDIT_NAME"
+}
