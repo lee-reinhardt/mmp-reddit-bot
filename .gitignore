@@ -1,2 +1,4 @@
 # real config file
 config.json
+# db
+db/*.sqlite3

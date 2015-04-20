@@ -31,6 +31,7 @@ GEM
       hashie
       httmultiparty (>= 0.3)
       httparty (>= 0.7.3)
+    sqlite3 (1.3.10)
 
 PLATFORMS
   ruby
@@ -39,3 +40,4 @@ DEPENDENCIES
   nokogiri
   redd (~> 0.7.5)
   soundcloud
+  sqlite3
