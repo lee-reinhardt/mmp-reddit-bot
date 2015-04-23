@@ -20,22 +20,33 @@ class Bot
     eps = burr_analyze_list burr_scrape
 
     eps.each do |ep|
-      sc_track_id = burr_analyze_ep burr_scrape ep[:link]
+      next if db_link_exists ep[:burr_link]
+
+      sc_track_id = burr_analyze_ep burr_scrape ep[:burr_link]
       sc_track    = soundcloud_fetch sc_track_id
 
-      if sc_track.nil?
-        puts "failed to find soundcloud track"
-        next
-      end
+      next if sc_track.nil?
 
-      ep = ep.merge({ title: sc_track['title'], sc_track_id: sc_track_id })
+      ep = ep.merge({
+        sc_title:      sc_track['title'],
+        sc_track_id:   sc_track_id,
+        sc_created_ts: DateTime.parse(sc_track['created_at']).strftime('%Y-%m-%d %H:%M:%S')
+      })
 
-      if db_exists ep
-        puts "skipping #{sc_track_id}, already in db"
-      else
-        db_add ep
-        # pp new_post ep[:link], ep[:title] + ' | ' + ep[:info]
-      end
+      next if db_scid_exists ep[:sc_track_id]
+
+      db_add ep
+
+      reddit_post = reddit_post ep
+
+      ep = ep.merge({
+        reddit_created_ts: DateTime.now.strftime('%Y-%m-%d %H:%M:%S'),
+        reddit_id: reddit_post[:id],
+        reddit_name: reddit_post[:name],
+        reddit_link: reddit_post[:url]
+      })
+
+      db_reddit_update ep
     end
 
   end
@@ -70,7 +81,7 @@ class Bot
       link = post.attribute('href').value
       info = post.css('p').first.children.to_s
 
-      eps.push( { link: link, info: info } )
+      eps.push({ burr_link: link, burr_info: info })
     end
 
     return eps
@@ -103,8 +114,11 @@ class Bot
     return nil
   end
 
-  def new_post link, title
+  def reddit_post ep
     load_reddit
+
+    title = ep[:sc_title] + ' | ' + ep[:burr_info]
+    link  = ep[:burr_link]
 
     begin
       return @reddit.subreddit_from_name(@config['subreddit_name'])
@@ -117,24 +131,45 @@ class Bot
     return nil
   end
 
-  def db_exists ep
-    begin
-      return @db.execute('select * from burr where sc_track_id = ?', [ ep[:sc_track_id] ]).length === 1
-    rescue
-      # @todo log
-      raise 'db error: select failed'
-    end
-  end
-
   def db_add ep
     puts "inserting #{ep[:sc_track_id]}"
 
     begin
-      @db.execute("insert into burr (sc_track_id, title, link, created_ts) VALUES (?, ?, ?, datetime('now'))",
-                 [ ep[:sc_track_id], ep[:title], ep[:link] ])
+      return @db.execute('insert into burr (sc_track_id, sc_created_ts, sc_title, burr_link, burr_info) VALUES (?, ?, ?, ?, ?)',
+                 [ ep[:sc_track_id], ep[:sc_created_ts], ep[:sc_title], ep[:burr_link], ep[:burr_info] ])
     rescue
       # @todo log
       raise 'db error: insert failed'
+    end
+  end
+
+  def db_reddit_update ep
+    puts "updating #{ep[:sc_track_id]}"
+
+    begin
+      return @db.execute('update burr set reddit_created_ts = ?, reddit_id = ?, reddit_name = ?, reddit_link = ? where sc_track_id = ?',
+                 [ ep[:reddit_created_ts], ep[:reddit_id], ep[:reddit_name], ep[:reddit_link], ep[:sc_track_id] ])
+    rescue
+      # @todo log
+      raise 'db error: insert failed'
+    end
+  end
+
+  def db_scid_exists scid
+    begin
+      return @db.execute('select * from burr where sc_track_id = ?', [scid]).length === 1
+    rescue
+      # @todo log
+      raise 'db error: scid select failed'
+    end
+  end
+
+  def db_link_exists link
+    begin
+      return @db.execute('select * from burr where burr_link = ?', [link]).length === 1
+    rescue
+      # @todo log
+      raise 'db error: link select failed'
     end
   end
 
