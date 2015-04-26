@@ -7,5 +7,6 @@
     "soundcloud_client_id": "SOUNDCLOUD_CLIENT_ID",
     "soundcloud_client_secret": "SOUNDCLOUD_CLIENT_SECRET",
 
-    "subreddit_name": "SUBREDDIT_NAME"
+    "subreddit_name": "SUBREDDIT_NAME",
+    "max_age_hrs": 48
 }

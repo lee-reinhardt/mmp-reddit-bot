@@ -6,6 +6,7 @@ require 'http'
 require 'redd'
 require 'sqlite3'
 require 'nokogiri'
+require 'syslogger'
 require 'soundcloud'
 
 class Bot
@@ -13,6 +14,7 @@ class Bot
   def initialize
     @db     = SQLite3::Database.new './db/burr.sqlite3'
     @config = JSON.parse File.read  './config.json'
+    @logger = Syslogger.new('mmpbot', Syslog::LOG_PID, Syslog::LOG_LOCAL0)
     @reddit = nil
   end
 
@@ -20,12 +22,18 @@ class Bot
     eps = burr_analyze_list burr_scrape
 
     eps.each do |ep|
-      next if db_link_exists ep[:burr_link]
+      if db_link_exists ep[:burr_link]
+        @logger.info "skipping link (in db), '#{ep[:burr_link]}'"
+        next
+      end
 
       sc_track_id = burr_analyze_ep burr_scrape ep[:burr_link]
       sc_track    = soundcloud_fetch sc_track_id
 
-      next if sc_track.nil?
+      if sc_track.nil?
+        @logger.info "failed to fetch sc track id '#{sc_track_id}'"
+        next
+      end
 
       ep = ep.merge({
         sc_title:      sc_track['title'],
@@ -33,17 +41,22 @@ class Bot
         sc_created_ts: DateTime.parse(sc_track['created_at']).strftime('%Y-%m-%d %H:%M:%S')
       })
 
-      next if db_scid_exists ep[:sc_track_id]
+      if db_scid_exists ep[:sc_track_id]
+        @logger.info "skipping sc track id (in db), '#{ep[:sc_track_id]}'"
+        next
+      end
+
+      next if not fresh_post sc_track
 
       db_add ep
 
       reddit_post = reddit_post ep
 
       ep = ep.merge({
-        reddit_created_ts: DateTime.now.strftime('%Y-%m-%d %H:%M:%S'),
-        reddit_id: reddit_post[:id],
-        reddit_name: reddit_post[:name],
-        reddit_link: reddit_post[:url]
+        reddit_id:          reddit_post[:id],
+        reddit_name:        reddit_post[:name],
+        reddit_link:        reddit_post[:url],
+        reddit_created_ts:  DateTime.now.strftime('%Y-%m-%d %H:%M:%S')
       })
 
       db_reddit_update ep
@@ -63,12 +76,23 @@ class Bot
     @reddit.authorize!
   end
 
+  def fresh_post sc_track
+    hrs_since_post = ((DateTime.now - DateTime.parse(sc_track['created_at'])) * 24).to_i
+
+    if hrs_since_post >= @config['max_age_hrs']
+      @logger.info "skipping sc track id '#{sc_track['id']}', (#{hrs_since_post} hrs old)"
+      return false
+    end
+
+    return true
+  end
+
   def burr_scrape link = nil
     link = link.nil? ? "http://www.billburr.com/podcast" : link
     req  = HTTP.get(link)
 
     if req.status != 200
-      raise "Bad status code '#{req.status}' from site"
+      raise "bad status code '#{req.status}' from site"
     end
 
     return req.body.to_s
@@ -106,9 +130,8 @@ class Bot
     begin
       # /users/24758916/tracks
       return client.get("/tracks/#{sc_track_id}")
-    rescue
-      # @todo log
-      puts "failed to find sc_track_id '#{sc_track_id}'"
+    rescue => e
+      @logger.error "failed to find sc_track_id '#{sc_track_id}', '#{e}'"
     end
 
     return nil
@@ -123,9 +146,9 @@ class Bot
     begin
       return @reddit.subreddit_from_name(@config['subreddit_name'])
                     .submit(title, url: link)
-    rescue
-      # @todo log
-      raise 'failed to submit reddit post'
+    rescue => e
+      @logger.error("failed to submit reddit post, '#{e}'")
+      raise e
     end
 
     return nil
@@ -137,9 +160,9 @@ class Bot
     begin
       return @db.execute('insert into burr (sc_track_id, sc_created_ts, sc_title, burr_link, burr_info) VALUES (?, ?, ?, ?, ?)',
                  [ ep[:sc_track_id], ep[:sc_created_ts], ep[:sc_title], ep[:burr_link], ep[:burr_info] ])
-    rescue
-      # @todo log
-      raise 'db error: insert failed'
+    rescue => e
+      @logger.error("failed to insert sc track id '#{ep[:sc_track_id]}', '#{e}'")
+      raise e
     end
   end
 
@@ -149,27 +172,27 @@ class Bot
     begin
       return @db.execute('update burr set reddit_created_ts = ?, reddit_id = ?, reddit_name = ?, reddit_link = ? where sc_track_id = ?',
                  [ ep[:reddit_created_ts], ep[:reddit_id], ep[:reddit_name], ep[:reddit_link], ep[:sc_track_id] ])
-    rescue
-      # @todo log
-      raise 'db error: insert failed'
+    rescue => e
+      @logger.error("failed to update sc track id '#{ep[:sc_track_id]}', '#{e}'")
+      raise e
     end
   end
 
   def db_scid_exists scid
     begin
       return @db.execute('select * from burr where sc_track_id = ?', [scid]).length === 1
-    rescue
-      # @todo log
-      raise 'db error: scid select failed'
+    rescue => e
+      @logger.error("failed to query for sc track id '#{scid}', '#{e}'")
+      raise e
     end
   end
 
   def db_link_exists link
     begin
       return @db.execute('select * from burr where burr_link = ?', [link]).length === 1
-    rescue
-      # @todo log
-      raise 'db error: link select failed'
+    rescue => e
+      @logger.error("failed to query for link '#{link}', '#{e}'")
+      raise e
     end
   end
 

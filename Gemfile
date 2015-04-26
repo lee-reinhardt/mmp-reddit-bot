@@ -1,6 +1,7 @@
 source 'https://rubygems.org'
 
-gem 'soundcloud'
 gem 'redd', '~> 0.7.5'
-gem 'nokogiri'
 gem 'sqlite3'
+gem 'nokogiri'
+gem 'syslogger'
+gem 'soundcloud'
