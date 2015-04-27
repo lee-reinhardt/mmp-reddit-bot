@@ -11,6 +11,12 @@ GEM
       httparty (>= 0.7.3)
       mimemagic
       multipart-post
+    http (0.8.3)
+      addressable (~> 2.3)
+      http-form_data (~> 1.0.1)
+      http_parser.rb (~> 0.6.0)
+    http-form_data (1.0.1)
+    http_parser.rb (0.6.0)
     httparty (0.13.3)
       json (~> 1.8)
       multi_xml (>= 0.5.2)
@@ -38,6 +44,7 @@ PLATFORMS
   ruby
 
 DEPENDENCIES
+  http
   nokogiri
   redd (~> 0.7.5)
   soundcloud
