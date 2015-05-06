@@ -12,8 +12,8 @@ require 'soundcloud'
 class Bot
 
   def initialize
-    @db     = SQLite3::Database.new './db/burr.sqlite3'
-    @config = JSON.parse File.read  './config.json'
+    @db     = SQLite3::Database.new(__dir__ + '/db/burr.sqlite3')
+    @config = JSON.parse File.read(__dir__ + '/config.json')
     @logger = Syslogger.new('mmpbot', Syslog::LOG_PID, Syslog::LOG_LOCAL0)
     @reddit = nil
   end
@@ -27,7 +27,7 @@ class Bot
         next
       end
 
-      sc_track_id = burr_analyze_ep burr_scrape ep[:burr_link]
+      sc_track_id = burr_analyze_ep(burr_scrape(ep[:burr_link]))
       sc_track    = soundcloud_fetch sc_track_id
 
       if sc_track.nil?
@@ -47,6 +47,8 @@ class Bot
       end
 
       next if not fresh_post sc_track
+
+      @logger.info "new episode, sc track id '#{ep[:sc_track_id]}', link '#{ep[:burr_link]}'"
 
       db_add ep
 
@@ -155,8 +157,6 @@ class Bot
   end
 
   def db_add ep
-    puts "inserting #{ep[:sc_track_id]}"
-
     begin
       return @db.execute('insert into burr (sc_track_id, sc_created_ts, sc_title, burr_link, burr_info) VALUES (?, ?, ?, ?, ?)',
                  [ ep[:sc_track_id], ep[:sc_created_ts], ep[:sc_title], ep[:burr_link], ep[:burr_info] ])
@@ -167,8 +167,6 @@ class Bot
   end
 
   def db_reddit_update ep
-    puts "updating #{ep[:sc_track_id]}"
-
     begin
       return @db.execute('update burr set reddit_created_ts = ?, reddit_id = ?, reddit_name = ?, reddit_link = ? where sc_track_id = ?',
                  [ ep[:reddit_created_ts], ep[:reddit_id], ep[:reddit_name], ep[:reddit_link], ep[:sc_track_id] ])
