@@ -8,5 +8,5 @@
     "soundcloud_client_secret": "SOUNDCLOUD_CLIENT_SECRET",
 
     "subreddit_name": "SUBREDDIT_NAME",
-    "max_age_hrs": 48
+    "max_age_hrs": 24
 }

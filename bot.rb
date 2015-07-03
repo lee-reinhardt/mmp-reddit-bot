@@ -15,40 +15,18 @@ class Bot
     @db     = SQLite3::Database.new(__dir__ + '/db/burr.sqlite3')
     @config = JSON.parse File.read(__dir__ + '/config.json')
     @logger = Syslogger.new('mmpbot', Syslog::LOG_PID, Syslog::LOG_LOCAL0)
-    @reddit = nil
   end
 
   def run
-    eps = burr_analyze_list burr_scrape
+    libsyn_eps.each do |ep|
+      next if not fresh_post ep
 
-    eps.each do |ep|
-      if db_link_exists ep[:burr_link]
-        @logger.info "skipping link (in db), '#{ep[:burr_link]}'"
+      if db_link_exists ep[:link]
+        @logger.info "skipping link '#{ep[:link]}' (in db)"
         next
       end
 
-      sc_track_id = burr_analyze_ep(burr_scrape(ep[:burr_link]))
-      sc_track    = soundcloud_fetch sc_track_id
-
-      if sc_track.nil?
-        @logger.info "failed to fetch sc track id '#{sc_track_id}'"
-        next
-      end
-
-      ep = ep.merge({
-        sc_title:      sc_track['title'],
-        sc_track_id:   sc_track_id,
-        sc_created_ts: DateTime.parse(sc_track['created_at']).strftime('%Y-%m-%d %H:%M:%S')
-      })
-
-      if db_scid_exists ep[:sc_track_id]
-        @logger.info "skipping sc track id (in db), '#{ep[:sc_track_id]}'"
-        next
-      end
-
-      next if not fresh_post sc_track
-
-      @logger.info "new episode, sc track id '#{ep[:sc_track_id]}', link '#{ep[:burr_link]}'"
+      @logger.info "new episode, link '#{ep[:link]}'"
 
       db_add ep
 
@@ -66,32 +44,12 @@ class Bot
 
   end
 
-  def load_reddit
-    return if ! @reddit.nil?
-
-    @reddit = Redd.it(:script,
-      @config['reddit_client_id'],
-      @config['reddit_client_secret'],
-      @config['reddit_username'],
-      @config['reddit_password'],
-      user_agent: "MMP Bot v0.1")
-    @reddit.authorize!
+  def libsyn_eps
+    return libsyn_parse libsyn_fetch
   end
 
-  def fresh_post sc_track
-    hrs_since_post = ((DateTime.now - DateTime.parse(sc_track['created_at'])) * 24).to_i
-
-    if hrs_since_post >= @config['max_age_hrs']
-      @logger.info "skipping sc track id '#{sc_track['id']}', (#{hrs_since_post} hrs old)"
-      return false
-    end
-
-    return true
-  end
-
-  def burr_scrape link = nil
-    link = link.nil? ? "http://www.billburr.com/podcast" : link
-    req  = HTTP.get(link)
+  def libsyn_fetch
+    req = HTTP.get('http://billburr.libsyn.com/rss')
 
     if req.status != 200
       raise "bad status code '#{req.status}' from site"
@@ -100,56 +58,51 @@ class Bot
     return req.body.to_s
   end
 
-  def burr_analyze_list body
-    eps = Array.new
+  def libsyn_parse text
+    xml = Nokogiri::XML(text)
+    eps = []
 
-    Nokogiri::HTML(body).css('article.post div.holder h2 a').each do |post|
-      link = post.attribute('href').value
-      info = post.css('p').first.children.to_s
-
-      eps.push({ burr_link: link, burr_info: info })
+    xml.xpath('//channel/item').each do |item|
+      eps.push({
+        link:       item.css('link').text,
+        title:      item.css('title').text,
+        info:       item.css('description').text.gsub(/<\/?[^>]*>/, ''), # strip <p> tags
+        created_ts: DateTime.parse(item.css('pubDate').text).strftime('%Y-%m-%d %H:%M:%S') # todo: normalize timezones
+      })
     end
 
     return eps
   end
 
-  def burr_analyze_ep body
-    iframe = Nokogiri::HTML(body).css('iframe')
+  def fresh_post ep
+    hrs_since_post = ((DateTime.now - DateTime.parse(ep[:created_ts])) * 24).to_i
 
-    return nil if iframe.nil? || iframe.length === 0
-
-    src   = iframe.attribute('src').value
-    match = /.+\/tracks\/(\d+).*/.match(src)
-
-    return match.nil? ? nil : match[1]
-  end
-
-  def soundcloud_fetch sc_track_id = nil
-    return nil if sc_track_id.nil?
-
-    client = Soundcloud.new(:client_id => @config['soundcloud_client_id'])
-
-    begin
-      # /users/24758916/tracks
-      return client.get("/tracks/#{sc_track_id}")
-    rescue => e
-      @logger.error "failed to find sc_track_id '#{sc_track_id}', '#{e}'"
+    if hrs_since_post >= @config['max_age_hrs']
+      @logger.info "skipping link '#{ep[:link]}' (#{hrs_since_post} hrs old)"
+      return false
     end
 
-    return nil
+    return true
   end
 
   def reddit_post ep
-    load_reddit
+    reddit = Redd.it(:script,
+      @config['reddit_client_id'],
+      @config['reddit_client_secret'],
+      @config['reddit_username'],
+      @config['reddit_password'],
+      user_agent: "MMP Bot v0.1")
 
-    title = ep[:sc_title] + ' | ' + ep[:burr_info]
-    link  = ep[:burr_link]
+    reddit.authorize!
+
+    title = ep[:title] + ' | ' + ep[:info]
+    link  = ep[:link]
 
     begin
-      return @reddit.subreddit_from_name(@config['subreddit_name'])
-                    .submit(title, url: link)
+      return reddit.subreddit_from_name(@config['subreddit_name'])
+                   .submit(title, url: link)
     rescue => e
-      @logger.error("failed to submit reddit post, '#{e}'")
+      @logger.error("failed to submit reddit post, '#{e}'\n#{e.backtrace}")
       raise e
     end
 
@@ -158,36 +111,27 @@ class Bot
 
   def db_add ep
     begin
-      return @db.execute('insert into burr (sc_track_id, sc_created_ts, sc_title, burr_link, burr_info) VALUES (?, ?, ?, ?, ?)',
-                 [ ep[:sc_track_id], ep[:sc_created_ts], ep[:sc_title], ep[:burr_link], ep[:burr_info] ])
+      return @db.execute('insert into burr (link, title, info, created_ts) VALUES (?, ?, ?, ?)',
+                 [ ep[:link], ep[:title], ep[:info], ep[:created_ts] ])
     rescue => e
-      @logger.error("failed to insert sc track id '#{ep[:sc_track_id]}', '#{e}'")
+      @logger.error("failed to insert link '#{ep[:link]}', '#{e}'")
       raise e
     end
   end
 
   def db_reddit_update ep
     begin
-      return @db.execute('update burr set reddit_created_ts = ?, reddit_id = ?, reddit_name = ?, reddit_link = ? where sc_track_id = ?',
-                 [ ep[:reddit_created_ts], ep[:reddit_id], ep[:reddit_name], ep[:reddit_link], ep[:sc_track_id] ])
+      return @db.execute('update burr set reddit_created_ts = ?, reddit_id = ?, reddit_name = ?, reddit_link = ? where link = ?',
+                 [ ep[:reddit_created_ts], ep[:reddit_id], ep[:reddit_name], ep[:reddit_link], ep[:link] ])
     rescue => e
-      @logger.error("failed to update sc track id '#{ep[:sc_track_id]}', '#{e}'")
-      raise e
-    end
-  end
-
-  def db_scid_exists scid
-    begin
-      return @db.execute('select * from burr where sc_track_id = ?', [scid]).length === 1
-    rescue => e
-      @logger.error("failed to query for sc track id '#{scid}', '#{e}'")
+      @logger.error("failed to update link '#{ep[:link]}', '#{e}'")
       raise e
     end
   end
 
   def db_link_exists link
     begin
-      return @db.execute('select * from burr where burr_link = ?', [link]).length === 1
+      return @db.execute('select * from burr where link = ?', [link]).length === 1
     rescue => e
       @logger.error("failed to query for link '#{link}', '#{e}'")
       raise e
