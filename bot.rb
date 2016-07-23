@@ -41,7 +41,6 @@ class Bot
 
       db_reddit_update ep
     end
-
   end
 
   def libsyn_eps
@@ -96,11 +95,20 @@ class Bot
     reddit.authorize!
 
     title = ep[:title] + ' | ' + ep[:info]
-    link  = ep[:link]
+    text =
+<<-TEXT
+# #{ep[:title]}
+
+## #{ep[:info]}
+
+#{ep[:link]}
+TEXT
 
     begin
+      @logger.info "submitting link: #{ep[:link]}"
+
       return reddit.subreddit_from_name(@config['subreddit_name'])
-                   .submit(title, url: link)
+                   .submit(title, text: text, sendreplies: false)
     rescue => e
       @logger.error("failed to submit reddit post, '#{e}'\n#{e.backtrace}")
       raise e
